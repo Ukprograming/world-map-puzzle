@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット）</title>
+<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット＋ズーム・パン）</title>
 <style>
   :root{
     --bg:#f6f9ff; --panel:#ffffff; --ink:#0b1220; --muted:#5b6476;
@@ -32,7 +32,7 @@
   .chips{display:flex;gap:6px;margin:6px 0 10px}
   .chips button{background:var(--chip);border:1px solid var(--chip-stroke);border-radius:8px;color:var(--ink);padding:4px 8px}
   main{grid-area:main;position:relative}
-  #svg{width:100%;height:100%;display:block;background:#eaf4ff}
+  #svg{width:100%;height:100%;display:block;background:#eaf4ff;touch-action:none}
   .coast{fill:none;stroke:var(--accent);stroke-width:1.5;opacity:.95}
   .target{fill:none;stroke:#9db5d8;stroke-width:1;stroke-dasharray:4 3;opacity:.9;pointer-events:none}
   .piece-path{fill-opacity:.92;stroke:#2b6cb0;stroke-opacity:.9;stroke-width:1.4;paint-order:stroke;vector-effect:non-scaling-stroke}
@@ -52,7 +52,7 @@
   <header>
     <h1>世界対応・国名パズル</h1>
 
-    <!-- 地域の切替（manifest.json から埋める） -->
+    <!-- 地域の切替 -->
     <div class="grp">
       <label>地域:
         <select id="regionSel"></select>
@@ -76,6 +76,14 @@
       <button id="btnStart" class="primary" disabled>ゲーム開始</button>
       <button id="btnReset">リセット</button>
     </div>
+
+    <!-- ズーム操作 -->
+    <div class="grp">
+      <span>ズーム:</span>
+      <button id="zoomOut">−</button>
+      <button id="zoomIn">＋</button>
+      <button id="zoomReset">リセット</button>
+    </div>
   </header>
 
   <aside>
@@ -92,19 +100,24 @@
 
   <main>
     <svg id="svg" role="img" aria-label="海岸線パズル">
-      <!-- 海（背景。陸でくり抜くマスクはJSで構築） -->
       <defs>
         <linearGradient id="oceanGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="#eaf6ff"/>
           <stop offset="100%" stop-color="#cfeaff"/>
         </linearGradient>
       </defs>
-      <rect id="ocean" x="0" y="0" width="100%" height="100%" fill="url(#oceanGrad)"></rect>
 
-      <g id="mapRoot"></g>
-      <g id="targetsRoot"></g>
-      <g id="piecesRoot"></g>
-      <g id="namesRoot"></g>
+      <!-- ★ ここからズーム対象のコンテナ -->
+      <g id="zoomLayer">
+        <!-- 海（背景。陸でくり抜くマスクはJSで構築） -->
+        <rect id="ocean" x="0" y="0" width="100%" height="100%" fill="url(#oceanGrad)"></rect>
+
+        <g id="mapRoot"></g>
+        <g id="targetsRoot"></g>
+        <g id="piecesRoot"></g>
+        <g id="namesRoot"></g>
+      </g>
+      <!-- ★ ここまでズーム対象 -->
     </svg>
     <div class="hud">正解: <b id="ok">0</b> / <b id="total">0</b></div>
   </main>
@@ -116,6 +129,7 @@
 <script>
 (function(){
   const svg=d3.select('#svg');
+  const zoomLayer=d3.select('#zoomLayer');
   const mapRoot=d3.select('#mapRoot');
   const targetsRoot=d3.select('#targetsRoot');
   const piecesRoot=d3.select('#piecesRoot');
@@ -136,11 +150,18 @@
   const listEl=document.getElementById('countryList');
   const filterEl=document.getElementById('filter');
 
-  let projection=null, geoPath=null;  // WGS84
+  const btnZoomIn=document.getElementById('zoomIn');
+  const btnZoomOut=document.getElementById('zoomOut');
+  const btnZoomReset=document.getElementById('zoomReset');
+
+  let projection=null, geoPath=null;
   let coastFC=null, countriesFC=null;
   let selectedNames=new Set();
   let manifest=null;
   let game=null;
+
+  // 現在のズーム変換
+  let currentZoom = d3.zoomIdentity;
 
   // ピースのカラーパレット
   const COLORS = [
@@ -186,6 +207,21 @@
     return topojson.feature(topo, topo.objects[name]);
   }
 
+  // ===== d3-zoom 設定 =====
+  const zoom = d3.zoom()
+    .scaleExtent([0.8, 8])
+    .on('zoom', (ev)=>{
+      currentZoom = ev.transform;
+      zoomLayer.attr('transform', currentZoom);
+    });
+
+  // ダブルクリックでの自動ズームは無効（誤操作防止）
+  svg.call(zoom).on("dblclick.zoom", null);
+
+  btnZoomIn.addEventListener('click', ()=> svg.transition().call(zoom.scaleBy, 1.2));
+  btnZoomOut.addEventListener('click', ()=> svg.transition().call(zoom.scaleBy, 1/1.2));
+  btnZoomReset.addEventListener('click', ()=> svg.transition().call(zoom.transform, d3.zoomIdentity));
+
   // 地域をfetchして差し替え
   btnLoadRegion.addEventListener('click', async ()=>{
     if(!manifest) return;
@@ -201,8 +237,8 @@
       countriesFC = topoToFC(countriesTopo);
 
       selectedNames.clear();
-      buildList();        // 国名一覧を再構築
-      fitAndDraw();       // ★国境に合わせて自動フィット & 海岸線描画
+      buildList();
+      fitAndDraw();            // 自動フィット
       okEl.textContent='0'; totalEl.textContent='0';
       enable();
     }catch(e){
@@ -232,19 +268,21 @@
 
   function enable(){ btnStart.disabled = !(coastFC && countriesFC && selectedNames.size>0); }
 
-  // ====== ★投影＆海岸線描画（国境にフィット）======
+  // ====== 投影＆海岸線描画（国境にフィット）======
   function fitAndDraw(){
     if(!coastFC && !countriesFC) return;
 
-    // ★フィット対象：国境があれば国境、なければ海岸線
+    // ★投影のフィット対象：国境があれば国境、なければ海岸線
     const focusFC = countriesFC || coastFC;
 
     const rect=svg.node().getBoundingClientRect();
-    // 余白は左右上下 20px
     projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], focusFC);
     geoPath=d3.geoPath(projection);
 
-    // 背景（海岸線）は今のデータで描画
+    // ズームは毎回リセット（fitExtentの結果を基準にするため）
+    svg.call(zoom.transform, d3.zoomIdentity);
+
+    // 背景（海岸線）を描画
     mapRoot.selectAll('*').remove();
     if (coastFC && Array.isArray(coastFC.features)) {
       mapRoot.selectAll('path.coast')
@@ -284,7 +322,10 @@
         }
       }
     }
-    const m = defs.append('mask').attr('id','oceanMask');
+    const m = defs.append('mask')
+      .attr('id','oceanMask')
+      .attr('maskUnits','userSpaceOnUse')          /* ★重要 */
+      .attr('maskContentUnits','userSpaceOnUse');  /* ★重要 */
     m.append('rect').attr('x',0).attr('y',0).attr('width','100%').attr('height','100%').attr('fill','white');
     m.append('g').selectAll('path').data(landPaths)
       .join('path').attr('d', d=>d).attr('fill','black').attr('stroke','none');
@@ -384,18 +425,18 @@
         return g;
       });
 
-    // ===== ★初期配置：地域のBBox（国境があれば国境）右下に全ピースを重ねて出現
+    // 初期配置：地域のBBox（国境があれば国境）右下に全ピースを重ねて出現
     requestAnimationFrame(()=>{
       const pad = 20;
-      const baseFC = countriesFC || coastFC;      // ★ここがポイント
-      const b = geoPath.bounds(baseFC);           // 投影後のBBox
+      const baseFC = countriesFC || coastFC;
+      const b = geoPath.bounds(baseFC);
       const ax = (b[1][0] - pad);
       const ay = (b[1][1] - pad);
       gPieces.each(function(d){
         const tx = ax - d.cx;
         const ty = ay - d.cy;
         d.dx = tx; d.dy = ty;
-        d3.select(this).attr('transform', `translate(${tx},${ty})`);
+        d3.select(this).attr('transform', `translate(${d.dx},${d.dy})`);
       });
     });
 
@@ -411,8 +452,13 @@
     }
 
     const drag=d3.drag()
+      .on('start', (ev)=>{  // ★ズームとの競合を回避
+        if(ev.sourceEvent) ev.sourceEvent.stopPropagation();
+      })
       .on('drag', function(ev,d){
-        d.dx+=ev.dx; d.dy+=ev.dy;
+        // ★ズーム倍率で補正
+        d.dx += ev.dx / currentZoom.k;
+        d.dy += ev.dy / currentZoom.k;
         d3.select(this).attr('transform',`translate(${d.dx},${d.dy})`);
       })
       .on('end', function(ev,d){
@@ -440,8 +486,25 @@
         g.append('text').attr('class','tag-text').text(d=>d.name);
         return g;
       }).attr('transform',d=>`translate(${d.x},${d.y})`);
-      const dragName=d3.drag().on('drag',function(ev,d){ d.x+=ev.dx; d.y+=ev.dy; d3.select(this).attr('transform',`translate(${d.x},${d.y})`); })
-        .on('end',function(ev,d){ const piece=items.find(p=>p.nameJa===d.name); if(piece){ const dist=Math.hypot(d.x-piece.cx, d.y-piece.cy); if(dist<=40){ d.x=piece.cx; d.y=piece.cy; d3.select(this).attr('transform',`translate(${d.x},${d.y})`).classed('correct',true); bump(); } } });
+      const dragName=d3.drag()
+        .on('start', (ev)=>{ if(ev.sourceEvent) ev.sourceEvent.stopPropagation(); })
+        .on('drag',function(ev,d){
+          d.x += ev.dx / currentZoom.k;
+          d.y += ev.dy / currentZoom.k;
+          d3.select(this).attr('transform',`translate(${d.x},${d.y})`);
+        })
+        .on('end',function(ev,d){
+          const piece=items.find(p=>p.nameJa===d.name);
+          if(piece){
+            // スクリーン距離ではなく現在のズームを考慮して位置比較（簡易）
+            const dist=Math.hypot((d.x-piece.cx),(d.y-piece.cy));
+            if(dist<=40/currentZoom.k){
+              d.x=piece.cx; d.y=piece.cy;
+              d3.select(this).attr('transform',`translate(${d.x},${d.y})`).classed('correct',true);
+              bump();
+            }
+          }
+        });
       gNames.call(dragName);
     }
 
@@ -459,7 +522,7 @@
     okEl.textContent=ok;
   }
 
-  // 画面サイズ変更時も再フィット（重い再配置は避ける）
+  // 画面サイズ変更時：投影を再フィットし、ズームをリセット
   window.addEventListener('resize', ()=>{ if(coastFC || countriesFC){ fitAndDraw(); } });
 })();
 </script>
