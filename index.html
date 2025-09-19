@@ -501,7 +501,7 @@
     function isAxisRect(px){ if(!px||px.length<4) return false; const xs=[...new Set(px.map(p=>Math.round(p[0])))], ys=[...new Set(px.map(p[1]))]; return xs.length===2 && ys.length===2 && px.length<=8; }
     const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
     function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
-    const MIN_A = 25;
+    const MIN_A = 3;
     return rings.filter(r=>{
       const px = toPx(r);
       const A  = areaPx(px);
@@ -702,3 +702,4 @@
 </script>
 </body>
 </html>
+
