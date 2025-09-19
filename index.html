@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット＋ズーム・パン／複数外輪対応）</title>
+<title>世界対応・国名パズル（TopoJSON／地域切替・自動フィット・ズーム・複数外輪・主要国プリセット）</title>
 <style>
   :root{
     --bg:#f6f9ff; --panel:#ffffff; --ink:#0b1220; --muted:#5b6476;
@@ -13,7 +13,7 @@
   body{
     margin:0;background:var(--bg);color:var(--ink);
     font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",sans-serif;
-    display:grid;grid-template-rows:auto 1fr;grid-template-columns:320px 1fr;
+    display:grid;grid-template-rows:auto 1fr;grid-template-columns:340px 1fr;
     grid-template-areas:"top top" "left main";
   }
   header{
@@ -27,10 +27,11 @@
   input[type=file]{background:var(--control)}
   button.primary{background:#2563eb;color:#fff;border-color:transparent}
   aside{grid-area:left;background:var(--panel);border-right:1px solid var(--stroke);padding:10px;overflow:auto}
-  .list{display:grid;gap:6px;max-height:300px;overflow:auto;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:#fff}
+  .list{display:grid;gap:6px;max-height:320px;overflow:auto;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:#fff}
   .list label{display:flex;gap:8px;align-items:center;font-size:13px}
-  .chips{display:flex;gap:6px;margin:6px 0 10px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
   .chips button{background:var(--chip);border:1px solid var(--chip-stroke);border-radius:8px;color:var(--ink);padding:4px 8px}
+  .chips .tag{font-size:12px;color:#334155;margin-left:4px}
   main{grid-area:main;position:relative}
   #svg{width:100%;height:100%;display:block;background:#eaf4ff;touch-action:none}
   .coast{fill:none;stroke:var(--accent);stroke-width:1.5;opacity:.95}
@@ -88,14 +89,24 @@
 
   <aside>
     <h3 style="margin:6px 0 4px;color:#26324e;font-size:13px">出題する国</h3>
-    <div class="chips">
+
+    <!-- プリセット群 -->
+    <div class="chips" id="presetBar">
       <button data-preset="eu">EU圏</button>
+      <button data-preset="pop">人口上位</button>
+      <button data-preset="area">面積上位</button>
+      <button data-preset="gdp">GDP上位</button>
+      <button data-preset="dev">先進国</button>
+      <span class="tag">※ 上位件数: <b id="topNLabel">10</b></span>
+    </div>
+
+    <input id="filter" placeholder="国名フィルター…" style="width:100%;background:#fff;border:1px solid var(--chip-stroke);border-radius:8px;padding:6px 8px;color:var(--ink)">
+    <div id="countryList" class="list" aria-live="polite"></div>
+    <div class="chips">
       <button data-preset="all">全選択</button>
       <button data-preset="clear">全解除</button>
     </div>
-    <input id="filter" placeholder="国名フィルター…" style="width:100%;background:#fff;border:1px solid var(--chip-stroke);border-radius:8px;padding:6px 8px;color:var(--ink)">
-    <div id="countryList" class="list" aria-live="polite"></div>
-    <small style="color:var(--muted)">※ 地域の読み込み/国境TopoJSONの読み込み後に一覧が出ます</small>
+    <small style="color:var(--muted)">※ 地域読み込み後、プリセットが使えます</small>
   </aside>
 
   <main>
@@ -148,6 +159,8 @@
   const totalEl=document.getElementById('total');
   const listEl=document.getElementById('countryList');
   const filterEl=document.getElementById('filter');
+  const presetBar=document.getElementById('presetBar');
+  const topNLabel=document.getElementById('topNLabel');
 
   const btnZoomIn=document.getElementById('zoomIn');
   const btnZoomOut=document.getElementById('zoomOut');
@@ -161,6 +174,10 @@
 
   // 現在のズーム変換
   let currentZoom = d3.zoomIdentity;
+
+  // 上位何か国を採用するか（必要ならUI化可）
+  const TOP_N = 10; // ← ここを 5 / 15 / 20 などに変えるだけ
+  topNLabel.textContent = TOP_N;
 
   // ピースのカラーパレット
   const COLORS = [
@@ -348,23 +365,109 @@
       label.appendChild(cb); label.appendChild(span); listEl.appendChild(label);
     });
     filterEl.oninput=()=>{ const q=filterEl.value.trim().toLowerCase(); listEl.querySelectorAll('label').forEach(L=>{ L.style.display = L.textContent.toLowerCase().includes(q)?'':''; }); };
-    document.querySelectorAll('.chips button').forEach(btn=>{ btn.onclick=()=>applyPreset(btn.dataset.preset); });
+
+    // プリセットボタンのイベント
+    presetBar.querySelectorAll('button[data-preset]').forEach(btn=>{
+      btn.onclick = ()=> applyPreset(btn.dataset.preset);
+    });
   }
 
-  function applyPreset(type){
-    if(!countriesFC) return; const labels=listEl.querySelectorAll('label');
-    const EU={'Austria':1,'Belgium':1,'Bulgaria':1,'Croatia':1,'Cyprus':1,'Czechia':1,'Czech Republic':1,'Denmark':1,'Estonia':1,'Finland':1,'France':1,'Germany':1,'Greece':1,'Hungary':1,'Ireland':1,'Italy':1,'Latvia':1,'Lithuania':1,'Luxembourg':1,'Malta':1,'Netherlands':1,'Poland':1,'Portugal':1,'Romania':1,'Slovakia':1,'Slovenia':1,'Spain':1,'Sweden':1};
-    labels.forEach(L=>{ const cb=L.querySelector('input'); let on=false;
-      if(type==='eu') on=!!EU[cb.value] || !!EU[L.textContent.trim()];
-      else if(type==='all') on=true; else if(type==='clear') on=false;
-      cb.checked=on; if(on) selectedNames.add(cb.value); else selectedNames.delete(cb.value);
+  // ===== メトリクス（人口・GDP・面積）ヘルパ =====
+  const R_EARTH_KM = 6371; // km
+  function metricPopulation(f){
+    const p = f.properties||{};
+    return +(
+      p.POP_EST ?? p.POP ?? p.POP2015 ?? p.POP2020 ?? p.POP_2020 ?? 0
+    );
+  }
+  function metricGDP(f){
+    const p = f.properties||{};
+    // 単位: 百万USDを想定（なければそれっぽいキーにフォールバック）
+    return +(
+      p.GDP_MD_EST ?? p.GDP_MD ?? p.GDP ?? p.GDP_USD ?? 0
+    );
+  }
+  function metricAreaKm2(f){
+    // d3.geoArea は球面上の面積（ステラジアン）→ km^2 に換算
+    const ster = d3.geoArea(f); // [sr]
+    return ster * R_EARTH_KM * R_EARTH_KM;
+  }
+  function isDeveloped(f){
+    const p = f.properties||{};
+    const econ = (p.ECONOMY||'').toLowerCase();
+    const inc  = (p.INCOME_GRP||p.INCOME||'').toLowerCase();
+    // ゆるめ判定：経済=Developed または 所得=High income
+    return (econ.includes('developed') || inc.includes('high income'));
+  }
+
+  function getFeatureByKeyMap(){
+    // ADMIN or NAME をキーとして label→feature を引けるように
+    const map = new Map();
+    for(const f of (countriesFC?.features||[])){
+      const k = (f.properties?.ADMIN || f.properties?.NAME);
+      if(k) map.set(k, f);
+    }
+    return map;
+  }
+
+  function setSelectionByNames(nameSet){
+    selectedNames.clear();
+    const labels=listEl.querySelectorAll('label');
+    labels.forEach(L=>{
+      const cb=L.querySelector('input');
+      const on = nameSet.has(cb.value);
+      cb.checked = on;
+      if(on) selectedNames.add(cb.value);
     });
     enable();
   }
 
+  function topByMetric(metricFn, n=TOP_N){
+    const feats = countriesFC?.features || [];
+    return feats
+      .map(f=>({f, v: metricFn(f)}))
+      .filter(d=> Number.isFinite(d.v) && d.v>0)
+      .sort((a,b)=> b.v - a.v)
+      .slice(0, n)
+      .map(d=> (d.f.properties?.ADMIN || d.f.properties?.NAME));
+  }
+
+  function developedSet(){
+    const feats = countriesFC?.features || [];
+    return feats
+      .filter(isDeveloped)
+      .map(f=> (f.properties?.ADMIN || f.properties?.NAME));
+  }
+
+  function applyPreset(type){
+    if(!countriesFC) return;
+    const EU={'Austria':1,'Belgium':1,'Bulgaria':1,'Croatia':1,'Cyprus':1,'Czechia':1,'Czech Republic':1,'Denmark':1,'Estonia':1,'Finland':1,'France':1,'Germany':1,'Greece':1,'Hungary':1,'Ireland':1,'Italy':1,'Latvia':1,'Lithuania':1,'Luxembourg':1,'Malta':1,'Netherlands':1,'Poland':1,'Portugal':1,'Romania':1,'Slovakia':1,'Slovenia':1,'Spain':1,'Sweden':1};
+
+    let names=[];
+    if(type==='eu'){
+      // 地域にEUが含まれない場合は何もしない（ある分だけ拾う）
+      const map=getFeatureByKeyMap();
+      names = [...map.keys()].filter(k=>EU[k]);
+    }else if(type==='pop'){
+      names = topByMetric(metricPopulation);
+    }else if(type==='area'){
+      names = topByMetric(metricAreaKm2);
+    }else if(type==='gdp'){
+      names = topByMetric(metricGDP);
+    }else if(type==='dev'){
+      names = developedSet();
+    }else if(type==='all'){
+      names = (countriesFC?.features||[]).map(f=> (f.properties?.ADMIN || f.properties?.NAME));
+    }else if(type==='clear'){
+      names = [];
+    }
+
+    setSelectionByNames(new Set(names));
+  }
+
   function resetGame(){ game=null; okEl.textContent='0'; totalEl.textContent='0'; targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove(); }
 
-  // ====== 複数外輪を収集（最大外輪のみの制限を撤廃） ======
+  // ====== 複数外輪を収集（最小面積しきい値を緩和） ======
   function collectOuterRings(feature){
     if(!feature || !feature.geometry) return [];
     const rings = [];
@@ -386,10 +489,12 @@
     const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
     function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
 
+    const MIN_A = 3; // ★ 小島も拾うように 80→25 に緩和
+
     return rings.filter(r=>{
       const px = toPx(r);
       const A  = areaPx(px);
-      if (A < 10) return false;
+      if (A < MIN_A) return false;
       if (isAxisRect(px)) return false;
       if (isHugeBBoxRing(px)) return false;
       return true;
@@ -576,5 +681,3 @@
 </script>
 </body>
 </html>
-
-
