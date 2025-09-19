@@ -389,7 +389,7 @@
     return rings.filter(r=>{
       const px = toPx(r);
       const A  = areaPx(px);
-      if (A < 25) return false;
+      if (A < 10) return false;
       if (isAxisRect(px)) return false;
       if (isHugeBBoxRing(px)) return false;
       return true;
@@ -576,4 +576,5 @@
 </script>
 </body>
 </html>
+
 
