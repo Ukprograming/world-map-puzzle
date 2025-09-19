@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>世界対応・国名パズル（TopoJSON＆地域切替）</title>
+<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット）</title>
 <style>
   :root{
     --bg:#f6f9ff; --panel:#ffffff; --ink:#0b1220; --muted:#5b6476;
@@ -60,7 +60,7 @@
       <button id="btnLoadRegion" class="primary">地域を読み込み</button>
     </div>
 
-    <!-- 手動ファイル読込（残しておくと検証に便利） -->
+    <!-- 手動ファイル読込（検証用） -->
     <div class="grp">
       <label>海岸線: <input id="coastFile" type="file" accept=".json,.geojson,.topojson"></label>
       <label>国境: <input id="countryFile" type="file" accept=".json,.geojson,.topojson"></label>
@@ -194,16 +194,15 @@
     if(!rg) return;
     try{
       const [coastTopo, countriesTopo] = await Promise.all([
-        fetch(rg.coast).then(r=>r.json()),
-        fetch(rg.countries).then(r=>r.json())
+        fetch(rg.coast, {cache:'no-store'}).then(r=>r.json()),
+        fetch(rg.countries, {cache:'no-store'}).then(r=>r.json())
       ]);
       coastFC     = topoToFC(coastTopo);
       countriesFC = topoToFC(countriesTopo);
 
       selectedNames.clear();
       buildList();        // 国名一覧を再構築
-      fitAndDraw();       // 投影＆海岸線描画
-      drawOceanMask();    // 海だけ塗るマスクを再構築
+      fitAndDraw();       // ★国境に合わせて自動フィット & 海岸線描画
       okEl.textContent='0'; totalEl.textContent='0';
       enable();
     }catch(e){
@@ -213,8 +212,8 @@
   });
 
   // 手動ファイル読込（TopoJSON/GeoJSON両対応）
-  coastInput.addEventListener('change', ()=>readAny(coastInput, g=>{coastFC=g; fitAndDraw(); enable(); drawOceanMask();}));
-  countryInput.addEventListener('change', ()=>readAny(countryInput, g=>{countriesFC=g; buildList(); enable(); drawOceanMask();}));
+  coastInput.addEventListener('change', ()=>readAny(coastInput, g=>{coastFC=g; fitAndDraw(); enable();}));
+  countryInput.addEventListener('change', ()=>readAny(countryInput, g=>{countriesFC=g; buildList(); enable(); fitAndDraw();}));
 
   function readAny(input, cb){
     const f=input.files && input.files[0]; if(!f) return;
@@ -222,31 +221,41 @@
     r.onload=()=>{
       try{
         const j=JSON.parse(r.result);
-        // TopoJSON と GeoJSON を自動判別
-        if(j.type==='Topology'){ cb( topoToFC(j) ); }
-        else { cb(j); }
+        if(j.type==='Topology'){ cb( topoToFC(j) ); } else { cb(j); }
       }catch(e){ alert('JSON/TopoJSONの解析に失敗: '+e.message); }
     };
     r.readAsText(f);
   }
 
   btnStart.addEventListener('click', ()=>{ if(countriesFC) startGame(); });
-  btnReset.addEventListener('click', ()=>{ resetGame(); fitAndDraw(); drawOceanMask(); });
+  btnReset.addEventListener('click', ()=>{ resetGame(); fitAndDraw(); });
 
   function enable(){ btnStart.disabled = !(coastFC && countriesFC && selectedNames.size>0); }
 
-  // 投影＆海岸線描画
+  // ====== ★投影＆海岸線描画（国境にフィット）======
   function fitAndDraw(){
-    if(!coastFC) return;
+    if(!coastFC && !countriesFC) return;
+
+    // ★フィット対象：国境があれば国境、なければ海岸線
+    const focusFC = countriesFC || coastFC;
+
     const rect=svg.node().getBoundingClientRect();
-    projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], coastFC);
+    // 余白は左右上下 20px
+    projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], focusFC);
     geoPath=d3.geoPath(projection);
 
+    // 背景（海岸線）は今のデータで描画
     mapRoot.selectAll('*').remove();
-    if(Array.isArray(coastFC.features)){
-      mapRoot.selectAll('path.coast').data(coastFC.features)
-        .join('path').attr('class','coast').attr('d', geoPath);
+    if (coastFC && Array.isArray(coastFC.features)) {
+      mapRoot.selectAll('path.coast')
+        .data(coastFC.features)
+        .join('path')
+        .attr('class','coast')
+        .attr('d', geoPath);
     }
+
+    // 海だけ塗るためのマスクを更新
+    drawOceanMask();
   }
 
   // 海だけ塗るためのマスク（countriesFC から陸地を黒でくり抜く）
@@ -375,10 +384,11 @@
         return g;
       });
 
-    // 初期配置：海岸線BBoxの右下（内側20px）に全ピースを重ねて出現
+    // ===== ★初期配置：地域のBBox（国境があれば国境）右下に全ピースを重ねて出現
     requestAnimationFrame(()=>{
       const pad = 20;
-      const b = geoPath.bounds(coastFC);
+      const baseFC = countriesFC || coastFC;      // ★ここがポイント
+      const b = geoPath.bounds(baseFC);           // 投影後のBBox
       const ax = (b[1][0] - pad);
       const ay = (b[1][1] - pad);
       gPieces.each(function(d){
@@ -421,7 +431,7 @@
       });
     gPieces.call(drag);
 
-    // レベル2：名前タイルを別にドラッグして当てる
+    // レベル2：名前タイルを別にドラッグ
     if(levelEl.value==='2'){
       const tags=items.map((p,i)=>({name:p.nameJa,x:20+((i%2)*140),y:26+Math.floor(i/2)*28}));
       const gNames=namesRoot.selectAll('g.name').data(tags).join(enter=>{
@@ -449,7 +459,8 @@
     okEl.textContent=ok;
   }
 
-  window.addEventListener('resize', ()=>{ if(coastFC){ fitAndDraw(); drawOceanMask(); if(game){ /*再配置は重いので必要時のみ*/ } } });
+  // 画面サイズ変更時も再フィット（重い再配置は避ける）
+  window.addEventListener('resize', ()=>{ if(coastFC || countriesFC){ fitAndDraw(); } });
 })();
 </script>
 </body>
