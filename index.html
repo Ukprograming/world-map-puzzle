@@ -47,6 +47,20 @@
   .tag-text{fill:#0b1220;font-size:12px;text-anchor:middle;dominant-baseline:middle}
   .hud{position:absolute;left:12px;bottom:12px;background:#ffffffcc;border:1px solid var(--stroke);border-radius:12px;padding:6px 10px;font-size:13px;backdrop-filter:saturate(1.2) blur(2px)}
   button:focus,select:focus,input:focus{outline:2px solid #93c5fd;outline-offset:2px}
+
+  /* 勝利オーバーレイ */
+  #winOverlay{
+    position:absolute;inset:0;display:none;place-items:center;
+    background:rgba(10,22,40,.55);backdrop-filter:blur(2px) saturate(1.2); z-index:10;
+  }
+  #winCard{
+    background:#ffffff; border:1px solid var(--stroke); border-radius:16px;
+    padding:20px 24px; text-align:center; min-width: min(90vw, 520px);
+    box-shadow:0 12px 30px rgba(25,54,100,.25);
+  }
+  #winCard h2{font-size:28px; margin:0 0 8px; color:#0b1220}
+  #winCard p{margin:0 0 16px; color:#475569}
+  #btnBackInit{background:#22c55e; color:#fff; border:none; padding:10px 14px; border-radius:10px; font-weight:700; cursor:pointer}
 </style>
 </head>
 <body>
@@ -130,6 +144,15 @@
       </g>
     </svg>
     <div class="hud">正解: <b id="ok">0</b> / <b id="total">0</b></div>
+
+    <!-- ★ 勝利オーバーレイ -->
+    <div id="winOverlay" aria-live="polite" aria-modal="true" role="dialog">
+      <div id="winCard">
+        <h2>🎉 全問正解！</h2>
+        <p>すべてのピースと国名を正しく配置できました。</p>
+        <button id="btnBackInit">最初の状態に戻る</button>
+      </div>
+    </div>
   </main>
 
 <!-- d3 & topojson-client -->
@@ -165,6 +188,9 @@
   const btnZoomIn=document.getElementById('zoomIn');
   const btnZoomOut=document.getElementById('zoomOut');
   const btnZoomReset=document.getElementById('zoomReset');
+
+  const winOverlay = document.getElementById('winOverlay');
+  const btnBackInit = document.getElementById('btnBackInit');
 
   let projection=null, geoPath=null;
   let coastFC=null, countriesFC=null;
@@ -315,7 +341,6 @@
       oceanRect.attr('mask', null);
       return;
     }
-    // 陸の外輪をパス化
     const landPaths = [];
     for(const f of countriesFC.features||[]){
       const g = f.geometry;
@@ -382,26 +407,21 @@
   }
   function metricGDP(f){
     const p = f.properties||{};
-    // 単位: 百万USDを想定（なければそれっぽいキーにフォールバック）
     return +(
       p.GDP_MD_EST ?? p.GDP_MD ?? p.GDP ?? p.GDP_USD ?? 0
     );
   }
   function metricAreaKm2(f){
-    // d3.geoArea は球面上の面積（ステラジアン）→ km^2 に換算
-    const ster = d3.geoArea(f); // [sr]
+    const ster = d3.geoArea(f);
     return ster * R_EARTH_KM * R_EARTH_KM;
   }
   function isDeveloped(f){
     const p = f.properties||{};
     const econ = (p.ECONOMY||'').toLowerCase();
     const inc  = (p.INCOME_GRP||p.INCOME||'').toLowerCase();
-    // ゆるめ判定：経済=Developed または 所得=High income
     return (econ.includes('developed') || inc.includes('high income'));
   }
-
   function getFeatureByKeyMap(){
-    // ADMIN or NAME をキーとして label→feature を引けるように
     const map = new Map();
     for(const f of (countriesFC?.features||[])){
       const k = (f.properties?.ADMIN || f.properties?.NAME);
@@ -409,7 +429,6 @@
     }
     return map;
   }
-
   function setSelectionByNames(nameSet){
     selectedNames.clear();
     const labels=listEl.querySelectorAll('label');
@@ -421,8 +440,7 @@
     });
     enable();
   }
-
-  function topByMetric(metricFn, n=TOP_N){
+  function topByMetric(metricFn, n=10){
     const feats = countriesFC?.features || [];
     return feats
       .map(f=>({f, v: metricFn(f)}))
@@ -431,29 +449,25 @@
       .slice(0, n)
       .map(d=> (d.f.properties?.ADMIN || d.f.properties?.NAME));
   }
-
   function developedSet(){
     const feats = countriesFC?.features || [];
     return feats
       .filter(isDeveloped)
       .map(f=> (f.properties?.ADMIN || f.properties?.NAME));
   }
-
   function applyPreset(type){
     if(!countriesFC) return;
     const EU={'Austria':1,'Belgium':1,'Bulgaria':1,'Croatia':1,'Cyprus':1,'Czechia':1,'Czech Republic':1,'Denmark':1,'Estonia':1,'Finland':1,'France':1,'Germany':1,'Greece':1,'Hungary':1,'Ireland':1,'Italy':1,'Latvia':1,'Lithuania':1,'Luxembourg':1,'Malta':1,'Netherlands':1,'Poland':1,'Portugal':1,'Romania':1,'Slovakia':1,'Slovenia':1,'Spain':1,'Sweden':1};
-
     let names=[];
     if(type==='eu'){
-      // 地域にEUが含まれない場合は何もしない（ある分だけ拾う）
       const map=getFeatureByKeyMap();
       names = [...map.keys()].filter(k=>EU[k]);
     }else if(type==='pop'){
-      names = topByMetric(metricPopulation);
+      names = topByMetric(metricPopulation, TOP_N);
     }else if(type==='area'){
-      names = topByMetric(metricAreaKm2);
+      names = topByMetric(metricAreaKm2, TOP_N);
     }else if(type==='gdp'){
-      names = topByMetric(metricGDP);
+      names = topByMetric(metricGDP, TOP_N);
     }else if(type==='dev'){
       names = developedSet();
     }else if(type==='all'){
@@ -461,18 +475,19 @@
     }else if(type==='clear'){
       names = [];
     }
-
     setSelectionByNames(new Set(names));
   }
 
-  function resetGame(){ game=null; okEl.textContent='0'; totalEl.textContent='0'; targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove(); }
+  function resetGame(){
+    game=null; okEl.textContent='0'; totalEl.textContent='0';
+    targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove();
+  }
 
-  // ====== 複数外輪を収集（最小面積しきい値を緩和） ======
+  // ====== 複数外輪を収集（小島も拾う閾値） ======
   function collectOuterRings(feature){
     if(!feature || !feature.geometry) return [];
     const rings = [];
     const g = feature.geometry;
-
     if(g.type === 'Polygon'){
       if(g.coordinates && g.coordinates[0]) rings.push(g.coordinates[0]);
     }else if(g.type === 'MultiPolygon'){
@@ -480,17 +495,13 @@
         if(poly && poly[0]) rings.push(poly[0]);
       }
     }
-
-    // フィルタ（小さすぎ/矩形/巨大BBoxの除外）
     function toPx(r){ return r.map(projection); }
     function areaPx(px){ let a=0; for(let i=0;i<px.length;i++){ const j=(i+1)%px.length; a += px[i][0]*px[j][1]-px[j][0]*px[i][1]; } return Math.abs(a/2); }
     function bbox(px){ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of px){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } return {minX,maxX,minY,maxY,w:maxX-minX,h:maxY-minY}; }
-    function isAxisRect(px){ if(!px||px.length<4) return false; const xs=[...new Set(px.map(p=>Math.round(p[0])))], ys=[...new Set(px.map(p=>Math.round(p[1])))]; return xs.length===2 && ys.length===2 && px.length<=8; }
+    function isAxisRect(px){ if(!px||px.length<4) return false; const xs=[...new Set(px.map(p=>Math.round(p[0])))], ys=[...new Set(px.map(p[1]))]; return xs.length===2 && ys.length===2 && px.length<=8; }
     const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
     function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
-
-    const MIN_A = 3; // ★ 小島も拾うように 80→25 に緩和
-
+    const MIN_A = 25;
     return rings.filter(r=>{
       const px = toPx(r);
       const A  = areaPx(px);
@@ -501,11 +512,8 @@
     });
   }
 
-  // 複数外輪 → それぞれのパス配列（ターゲット=絶対座標、ピース=共通中心からの相対）
   function ringsToPaths(rings){
     const allPts = rings.map(r => r.map(projection));
-
-    // 全体の共通中心（全点のBBox中心）
     let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
     for(const pts of allPts){
       for(const p of pts){
@@ -514,7 +522,6 @@
       }
     }
     const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
-
     const slotDs = allPts.map(pts=>{
       let d=''; for(let i=0;i<pts.length;i++){ d += (i?'L':'M') + pts[i][0].toFixed(1) + ',' + pts[i][1].toFixed(1) + ' '; }
       return d + 'Z';
@@ -607,9 +614,7 @@
     }
 
     const drag=d3.drag()
-      .on('start', (ev)=>{  // ズームとの競合を回避
-        if(ev.sourceEvent) ev.sourceEvent.stopPropagation();
-      })
+      .on('start', (ev)=>{ if(ev.sourceEvent) ev.sourceEvent.stopPropagation(); })
       .on('drag', function(ev,d){
         d.dx += ev.dx / currentZoom.k;
         d.dy += ev.dy / currentZoom.k;
@@ -673,9 +678,25 @@
       namesRoot.selectAll('g.name').each(function(){ if(d3.select(this).classed('correct')) ok++; });
     }
     okEl.textContent=ok;
+
+    const total = Number(totalEl.textContent)||0;
+    if(total>0 && ok>=total){
+      // ★ 全問正解！
+      winOverlay.style.display = 'grid';
+    }
   }
 
-  // 画面サイズ変更時：投影を再フィットし、ズームをリセット
+  // ★「最初の状態に戻る」：盤面を初期化して背景だけの状態へ
+  btnBackInit.addEventListener('click', ()=>{
+    winOverlay.style.display = 'none';
+    resetGame();
+    fitAndDraw();             // 背景を再描画
+    enable();                 // Startボタンの活性化を再評価（選択状況は保持）
+    // 任意でズームをリセット（fitAndDraw内で済んでいるが念のため）
+    svg.call(d3.zoom().transform, d3.zoomIdentity);
+  });
+
+  // ウィンドウサイズ変更時：投影を再フィットし、ズームをリセット
   window.addEventListener('resize', ()=>{ if(coastFC || countriesFC){ fitAndDraw(); } });
 })();
 </script>
