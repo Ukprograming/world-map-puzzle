@@ -1,0 +1,40 @@
+{
+  "regions": [
+    {
+      "id": "europe",
+      "label": "ヨーロッパ",
+      "coast": "data/europe/coast.topo.json",
+      "countries": "data/europe/countries.topo.json"
+    },
+    {
+      "id": "europe_ext",
+      "label": "拡大ヨーロッパ",
+      "coast": "data/europe_ext/coast.topo.json",
+      "countries": "data/europe_ext/countries.topo.json"
+    },
+    {
+      "id": "africa",
+      "label": "アフリカ",
+      "coast": "data/africa/coast.topo.json",
+      "countries": "data/africa/countries.topo.json"
+    },
+    {
+      "id": "asia_oceania",
+      "label": "アジア・オセアニア",
+      "coast": "data/asia_oceania/coast.topo.json",
+      "countries": "data/asia_oceania/countries.topo.json"
+    },
+    {
+      "id": "na",
+      "label": "北アメリカ",
+      "coast": "data/na/coast.topo.json",
+      "countries": "data/na/countries.topo.json"
+    },
+    {
+      "id": "sa",
+      "label": "南アメリカ",
+      "coast": "data/sa/coast.topo.json",
+      "countries": "data/sa/countries.topo.json"
+    }
+  ]
+}
