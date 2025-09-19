@@ -201,8 +201,8 @@
   // 現在のズーム変換
   let currentZoom = d3.zoomIdentity;
 
-  // 上位何か国を採用するか（必要ならUI化可）
-  const TOP_N = 10; // ← ここを 5 / 15 / 20 などに変えるだけ
+  // 上位何か国を採用するか
+  const TOP_N = 10;
   topNLabel.textContent = TOP_N;
 
   // ピースのカラーパレット
@@ -212,7 +212,7 @@
     "#b39ddb","#90caf9","#ffcc80","#9fa8da","#a5d6a7","#f48fb1"
   ];
 
-  // 英→日 簡易辞書（不足は GeoJSONの NAME_JA 系を優先）
+  // 英→日 簡易辞書
   const JA = {
     "Austria":"オーストリア","Belgium":"ベルギー","Bulgaria":"ブルガリア","Croatia":"クロアチア","Cyprus":"キプロス","Czechia":"チェコ","Czech Republic":"チェコ",
     "Denmark":"デンマーク","Estonia":"エストニア","Finland":"フィンランド","France":"フランス","Germany":"ドイツ","Greece":"ギリシャ","Hungary":"ハンガリー",
@@ -243,7 +243,7 @@
     })
     .catch(e=>console.error('manifest読み込み失敗:', e));
 
-  // TopoJSON → GeoJSON FeatureCollection（objects名は自動で最初を採用）
+  // TopoJSON → GeoJSON FeatureCollection
   function topoToFC(topo, objectName){
     const name = objectName || Object.keys(topo.objects)[0];
     return topojson.feature(topo, topo.objects[name]);
@@ -277,7 +277,7 @@
 
       selectedNames.clear();
       buildList();
-      fitAndDraw();            // 自動フィット
+      fitAndDraw();
       okEl.textContent='0'; totalEl.textContent='0';
       enable();
     }catch(e){
@@ -286,7 +286,7 @@
     }
   });
 
-  // 手動ファイル読込（TopoJSON/GeoJSON両対応）
+  // 手動ファイル読込
   coastInput.addEventListener('change', ()=>readAny(coastInput, g=>{coastFC=g; fitAndDraw(); enable();}));
   countryInput.addEventListener('change', ()=>readAny(countryInput, g=>{countriesFC=g; buildList(); enable(); fitAndDraw();}));
 
@@ -307,7 +307,7 @@
 
   function enable(){ btnStart.disabled = !(coastFC && countriesFC && selectedNames.size>0); }
 
-  // ====== 投影＆海岸線描画（国境にフィット）======
+  // ====== 投影＆海岸線描画 ======
   function fitAndDraw(){
     if(!coastFC && !countriesFC) return;
     const focusFC = countriesFC || coastFC;
@@ -315,10 +315,8 @@
     projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], focusFC);
     geoPath=d3.geoPath(projection);
 
-    // ズームは毎回リセット（fitExtentの結果を基準）
     svg.call(zoom.transform, d3.zoomIdentity);
 
-    // 背景（海岸線）を描画
     mapRoot.selectAll('*').remove();
     if (coastFC && Array.isArray(coastFC.features)) {
       mapRoot.selectAll('path.coast')
@@ -328,11 +326,10 @@
         .attr('d', geoPath);
     }
 
-    // 海だけ塗るためのマスクを更新
     drawOceanMask();
   }
 
-  // 海だけ塗るためのマスク（countriesFC から陸地を黒でくり抜く）
+  // 海だけ塗るためのマスク
   function drawOceanMask(){
     const defs = svg.select('defs');
     defs.select('#oceanMask').remove();
@@ -391,14 +388,14 @@
     });
     filterEl.oninput=()=>{ const q=filterEl.value.trim().toLowerCase(); listEl.querySelectorAll('label').forEach(L=>{ L.style.display = L.textContent.toLowerCase().includes(q)?'':''; }); };
 
-    // プリセットボタンのイベント
+    // プリセットボタン
     presetBar.querySelectorAll('button[data-preset]').forEach(btn=>{
       btn.onclick = ()=> applyPreset(btn.dataset.preset);
     });
   }
 
-  // ===== メトリクス（人口・GDP・面積）ヘルパ =====
-  const R_EARTH_KM = 6371; // km
+  // ===== メトリクス（人口・GDP・面積） =====
+  const R_EARTH_KM = 6371;
   function metricPopulation(f){
     const p = f.properties||{};
     return +(
@@ -414,7 +411,7 @@
   function metricAreaKm2(f){
     const ster = d3.geoArea(f);
     return ster * R_EARTH_KM * R_EARTH_KM;
-  }
+    }
   function isDeveloped(f){
     const p = f.properties||{};
     const econ = (p.ECONOMY||'').toLowerCase();
@@ -483,7 +480,7 @@
     targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove();
   }
 
-  // ====== 複数外輪を収集（小島も拾う閾値） ======
+  // ====== 複数外輪を収集（小島も拾う閾値、isAxisRect修正） ======
   function collectOuterRings(feature){
     if(!feature || !feature.geometry) return [];
     const rings = [];
@@ -498,10 +495,15 @@
     function toPx(r){ return r.map(projection); }
     function areaPx(px){ let a=0; for(let i=0;i<px.length;i++){ const j=(i+1)%px.length; a += px[i][0]*px[j][1]-px[j][0]*px[i][1]; } return Math.abs(a/2); }
     function bbox(px){ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of px){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } return {minX,maxX,minY,maxY,w:maxX-minX,h:maxY-minY}; }
-    function isAxisRect(px){ if(!px||px.length<4) return false; const xs=[...new Set(px.map(p=>Math.round(p[0])))], ys=[...new Set(px.map(p[1]))]; return xs.length===2 && ys.length===2 && px.length<=8; }
+    function isAxisRect(px){
+      if(!px||px.length<4) return false;
+      const xs=[...new Set(px.map(pt=>Math.round(pt[0])))];
+      const ys=[...new Set(px.map(pt=>Math.round(pt[1])))]; /* ← 修正 */
+      return xs.length===2 && ys.length===2 && px.length<=8;
+    }
     const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
     function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
-    const MIN_A = 3;
+    const MIN_A = 25;
     return rings.filter(r=>{
       const px = toPx(r);
       const A  = areaPx(px);
@@ -566,7 +568,7 @@
           .attr('d', s=>s);
         return g;
       });
-    const slotNodes = targetSel.nodes(); // 各国ごとの <g>
+    const slotNodes = targetSel.nodes();
 
     // ピース（複数パス）
     const gPieces=piecesRoot.selectAll('g.piece-group')
@@ -587,7 +589,7 @@
         return g;
       });
 
-    // 初期配置：地域のBBox（国境があれば国境）右下に全ピースを重ねて出現
+    // 初期配置：右下に全ピースを重ねて出現
     requestAnimationFrame(()=>{
       const pad = 20;
       const baseFC = countriesFC || coastFC;
@@ -686,20 +688,18 @@
     }
   }
 
-  // ★「最初の状態に戻る」：盤面を初期化して背景だけの状態へ
+  // ★「最初の状態に戻る」
   btnBackInit.addEventListener('click', ()=>{
     winOverlay.style.display = 'none';
     resetGame();
-    fitAndDraw();             // 背景を再描画
-    enable();                 // Startボタンの活性化を再評価（選択状況は保持）
-    // 任意でズームをリセット（fitAndDraw内で済んでいるが念のため）
+    fitAndDraw();
+    enable();
     svg.call(d3.zoom().transform, d3.zoomIdentity);
   });
 
-  // ウィンドウサイズ変更時：投影を再フィットし、ズームをリセット
+  // 画面サイズ変更時
   window.addEventListener('resize', ()=>{ if(coastFC || countriesFC){ fitAndDraw(); } });
 })();
 </script>
 </body>
 </html>
-
