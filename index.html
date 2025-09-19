@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>世界対応・国名パズル（TopoJSON＆地域切替）</title>
+<style>
+  :root{
+    --bg:#f6f9ff; --panel:#ffffff; --ink:#0b1220; --muted:#5b6476;
+    --accent:#2b6cb0; --ok:#059669; --stroke:#c9d7f3; --chip:#f1f5ff; --chip-stroke:#c7d2fe; --control:#eaf0ff;
+  }
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",sans-serif;
+    display:grid;grid-template-rows:auto 1fr;grid-template-columns:320px 1fr;
+    grid-template-areas:"top top" "left main";
+  }
+  header{
+    grid-area:top;display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+    background:linear-gradient(90deg,#eaf2ff,#fff);border-bottom:1px solid var(--stroke);
+    padding:10px 12px;
+  }
+  header h1{font-size:18px;margin:0 6px 0 0}
+  header .grp{display:flex;gap:8px;align-items:center;background:#ffffffb3;padding:8px;border-radius:10px;border:1px solid var(--stroke)}
+  select,button,input{background:#fff;color:var(--ink);border:1px solid var(--chip-stroke);border-radius:8px;padding:6px 10px}
+  input[type=file]{background:var(--control)}
+  button.primary{background:#2563eb;color:#fff;border-color:transparent}
+  aside{grid-area:left;background:var(--panel);border-right:1px solid var(--stroke);padding:10px;overflow:auto}
+  .list{display:grid;gap:6px;max-height:300px;overflow:auto;border:1px solid var(--stroke);border-radius:10px;padding:8px;background:#fff}
+  .list label{display:flex;gap:8px;align-items:center;font-size:13px}
+  .chips{display:flex;gap:6px;margin:6px 0 10px}
+  .chips button{background:var(--chip);border:1px solid var(--chip-stroke);border-radius:8px;color:var(--ink);padding:4px 8px}
+  main{grid-area:main;position:relative}
+  #svg{width:100%;height:100%;display:block;background:#eaf4ff}
+  .coast{fill:none;stroke:var(--accent);stroke-width:1.5;opacity:.95}
+  .target{fill:none;stroke:#9db5d8;stroke-width:1;stroke-dasharray:4 3;opacity:.9;pointer-events:none}
+  .piece-path{fill-opacity:.92;stroke:#2b6cb0;stroke-opacity:.9;stroke-width:1.4;paint-order:stroke;vector-effect:non-scaling-stroke}
+  .piece-group{cursor:grab}
+  .piece-group.correct .piece-path{stroke:var(--ok);stroke-width:2}
+  .piece-label{
+    font-size:12px;fill:#06203a;pointer-events:none;text-anchor:middle;dominant-baseline:middle;
+    paint-order:stroke;stroke:#ffffff;stroke-width:4px
+  }
+  .tag-pill{fill:#f1f5ff;stroke:var(--chip-stroke);stroke-width:1}
+  .tag-text{fill:#0b1220;font-size:12px;text-anchor:middle;dominant-baseline:middle}
+  .hud{position:absolute;left:12px;bottom:12px;background:#ffffffcc;border:1px solid var(--stroke);border-radius:12px;padding:6px 10px;font-size:13px;backdrop-filter:saturate(1.2) blur(2px)}
+  button:focus,select:focus,input:focus{outline:2px solid #93c5fd;outline-offset:2px}
+</style>
+</head>
+<body>
+  <header>
+    <h1>世界対応・国名パズル</h1>
+
+    <!-- 地域の切替（manifest.json から埋める） -->
+    <div class="grp">
+      <label>地域:
+        <select id="regionSel"></select>
+      </label>
+      <button id="btnLoadRegion" class="primary">地域を読み込み</button>
+    </div>
+
+    <!-- 手動ファイル読込（残しておくと検証に便利） -->
+    <div class="grp">
+      <label>海岸線: <input id="coastFile" type="file" accept=".json,.geojson,.topojson"></label>
+      <label>国境: <input id="countryFile" type="file" accept=".json,.geojson,.topojson"></label>
+    </div>
+
+    <div class="grp">
+      <label>レベル:
+        <select id="level">
+          <option value="1">レベル1（ピースに国名）</option>
+          <option value="2">レベル2（形と国名を別々に）</option>
+        </select>
+      </label>
+      <button id="btnStart" class="primary" disabled>ゲーム開始</button>
+      <button id="btnReset">リセット</button>
+    </div>
+  </header>
+
+  <aside>
+    <h3 style="margin:6px 0 4px;color:#26324e;font-size:13px">出題する国</h3>
+    <div class="chips">
+      <button data-preset="eu">EU圏</button>
+      <button data-preset="all">全選択</button>
+      <button data-preset="clear">全解除</button>
+    </div>
+    <input id="filter" placeholder="国名フィルター…" style="width:100%;background:#fff;border:1px solid var(--chip-stroke);border-radius:8px;padding:6px 8px;color:var(--ink)">
+    <div id="countryList" class="list" aria-live="polite"></div>
+    <small style="color:var(--muted)">※ 地域の読み込み/国境TopoJSONの読み込み後に一覧が出ます</small>
+  </aside>
+
+  <main>
+    <svg id="svg" role="img" aria-label="海岸線パズル">
+      <!-- 海（背景。陸でくり抜くマスクはJSで構築） -->
+      <defs>
+        <linearGradient id="oceanGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#eaf6ff"/>
+          <stop offset="100%" stop-color="#cfeaff"/>
+        </linearGradient>
+      </defs>
+      <rect id="ocean" x="0" y="0" width="100%" height="100%" fill="url(#oceanGrad)"></rect>
+
+      <g id="mapRoot"></g>
+      <g id="targetsRoot"></g>
+      <g id="piecesRoot"></g>
+      <g id="namesRoot"></g>
+    </svg>
+    <div class="hud">正解: <b id="ok">0</b> / <b id="total">0</b></div>
+  </main>
+
+<!-- d3 & topojson-client -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+
+<script>
+(function(){
+  const svg=d3.select('#svg');
+  const mapRoot=d3.select('#mapRoot');
+  const targetsRoot=d3.select('#targetsRoot');
+  const piecesRoot=d3.select('#piecesRoot');
+  const namesRoot=d3.select('#namesRoot');
+
+  const coastInput=document.getElementById('coastFile');
+  const countryInput=document.getElementById('countryFile');
+
+  const regionSel=document.getElementById('regionSel');
+  const btnLoadRegion=document.getElementById('btnLoadRegion');
+
+  const levelEl=document.getElementById('level');
+  const btnStart=document.getElementById('btnStart');
+  const btnReset=document.getElementById('btnReset');
+
+  const okEl=document.getElementById('ok');
+  const totalEl=document.getElementById('total');
+  const listEl=document.getElementById('countryList');
+  const filterEl=document.getElementById('filter');
+
+  let projection=null, geoPath=null;  // WGS84
+  let coastFC=null, countriesFC=null;
+  let selectedNames=new Set();
+  let manifest=null;
+  let game=null;
+
+  // ピースのカラーパレット
+  const COLORS = [
+    "#ff8a80","#ffd180","#ffff8d","#a7ffeb","#80d8ff","#b388ff","#f8bbd0",
+    "#c5e1a5","#ffe082","#81d4fa","#ce93d8","#80cbc4","#ffab91","#e6ee9c",
+    "#b39ddb","#90caf9","#ffcc80","#9fa8da","#a5d6a7","#f48fb1"
+  ];
+
+  // 英→日 簡易辞書（不足は GeoJSONの NAME_JA 系を優先）
+  const JA = {
+    "Austria":"オーストリア","Belgium":"ベルギー","Bulgaria":"ブルガリア","Croatia":"クロアチア","Cyprus":"キプロス","Czechia":"チェコ","Czech Republic":"チェコ",
+    "Denmark":"デンマーク","Estonia":"エストニア","Finland":"フィンランド","France":"フランス","Germany":"ドイツ","Greece":"ギリシャ","Hungary":"ハンガリー",
+    "Ireland":"アイルランド","Italy":"イタリア","Latvia":"ラトビア","Lithuania":"リトアニア","Luxembourg":"ルクセンブルク","Malta":"マルタ","Netherlands":"オランダ",
+    "Poland":"ポーランド","Portugal":"ポルトガル","Romania":"ルーマニア","Slovakia":"スロバキア","Slovenia":"スロベニア","Spain":"スペイン","Sweden":"スウェーデン",
+    "United Kingdom":"イギリス","Norway":"ノルウェー","Switzerland":"スイス","Iceland":"アイスランド","Albania":"アルバニア","Serbia":"セルビア",
+    "Bosnia and Herzegovina":"ボスニア・ヘルツェゴビナ","North Macedonia":"北マケドニア","Montenegro":"モンテネグロ","Kosovo":"コソボ",
+    "Moldova":"モルドバ","Ukraine":"ウクライナ","Belarus":"ベラルーシ","Russia":"ロシア","Turkey":"トルコ",
+    "Andorra":"アンドラ","Monaco":"モナコ","San Marino":"サンマリノ","Liechtenstein":"リヒテンシュタイン","Vatican":"バチカン"
+  };
+
+  function getJaName(props){
+    return props?.NAME_JA || props?.NAME_JP || props?.NAME_ja || props?.NAME_JA_UTF ||
+           JA[props?.ADMIN] || JA[props?.NAME] || props?.ADMIN || props?.NAME || "国";
+  }
+
+  // manifest をロードして地域セレクタを埋める
+  fetch('data/manifest.json')
+    .then(r=>r.json())
+    .then(j=>{
+      manifest=j;
+      regionSel.innerHTML='';
+      j.regions.forEach(rg=>{
+        const opt=document.createElement('option');
+        opt.value=rg.id; opt.textContent=rg.label;
+        regionSel.appendChild(opt);
+      });
+    })
+    .catch(e=>console.error('manifest読み込み失敗:', e));
+
+  // TopoJSON → GeoJSON FeatureCollection（objects名は自動で最初を採用）
+  function topoToFC(topo, objectName){
+    const name = objectName || Object.keys(topo.objects)[0];
+    return topojson.feature(topo, topo.objects[name]);
+  }
+
+  // 地域をfetchして差し替え
+  btnLoadRegion.addEventListener('click', async ()=>{
+    if(!manifest) return;
+    const id=regionSel.value;
+    const rg=manifest.regions.find(r=>r.id===id);
+    if(!rg) return;
+    try{
+      const [coastTopo, countriesTopo] = await Promise.all([
+        fetch(rg.coast).then(r=>r.json()),
+        fetch(rg.countries).then(r=>r.json())
+      ]);
+      coastFC     = topoToFC(coastTopo);
+      countriesFC = topoToFC(countriesTopo);
+
+      selectedNames.clear();
+      buildList();        // 国名一覧を再構築
+      fitAndDraw();       // 投影＆海岸線描画
+      drawOceanMask();    // 海だけ塗るマスクを再構築
+      okEl.textContent='0'; totalEl.textContent='0';
+      enable();
+    }catch(e){
+      console.error('地域データ読み込み失敗:', e);
+      alert('地域データの読み込みに失敗しました。パスやCORSをご確認ください。');
+    }
+  });
+
+  // 手動ファイル読込（TopoJSON/GeoJSON両対応）
+  coastInput.addEventListener('change', ()=>readAny(coastInput, g=>{coastFC=g; fitAndDraw(); enable(); drawOceanMask();}));
+  countryInput.addEventListener('change', ()=>readAny(countryInput, g=>{countriesFC=g; buildList(); enable(); drawOceanMask();}));
+
+  function readAny(input, cb){
+    const f=input.files && input.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=()=>{
+      try{
+        const j=JSON.parse(r.result);
+        // TopoJSON と GeoJSON を自動判別
+        if(j.type==='Topology'){ cb( topoToFC(j) ); }
+        else { cb(j); }
+      }catch(e){ alert('JSON/TopoJSONの解析に失敗: '+e.message); }
+    };
+    r.readAsText(f);
+  }
+
+  btnStart.addEventListener('click', ()=>{ if(countriesFC) startGame(); });
+  btnReset.addEventListener('click', ()=>{ resetGame(); fitAndDraw(); drawOceanMask(); });
+
+  function enable(){ btnStart.disabled = !(coastFC && countriesFC && selectedNames.size>0); }
+
+  // 投影＆海岸線描画
+  function fitAndDraw(){
+    if(!coastFC) return;
+    const rect=svg.node().getBoundingClientRect();
+    projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], coastFC);
+    geoPath=d3.geoPath(projection);
+
+    mapRoot.selectAll('*').remove();
+    if(Array.isArray(coastFC.features)){
+      mapRoot.selectAll('path.coast').data(coastFC.features)
+        .join('path').attr('class','coast').attr('d', geoPath);
+    }
+  }
+
+  // 海だけ塗るためのマスク（countriesFC から陸地を黒でくり抜く）
+  function drawOceanMask(){
+    const defs = svg.select('defs');
+    defs.select('#oceanMask').remove();
+    const oceanRect = svg.select('#ocean');
+    if(!countriesFC || !projection){
+      oceanRect.attr('mask', null);
+      return;
+    }
+    // 陸の外輪をパス化
+    const landPaths = [];
+    for(const f of countriesFC.features||[]){
+      const g = f.geometry;
+      if(!g) continue;
+      if(g.type==='Polygon'){
+        if(g.coordinates && g.coordinates[0]){
+          landPaths.push(ringToPathAbs(g.coordinates[0]));
+        }
+      }else if(g.type==='MultiPolygon'){
+        for(const poly of g.coordinates||[]){
+          if(poly && poly[0]){
+            landPaths.push(ringToPathAbs(poly[0]));
+          }
+        }
+      }
+    }
+    const m = defs.append('mask').attr('id','oceanMask');
+    m.append('rect').attr('x',0).attr('y',0).attr('width','100%').attr('height','100%').attr('fill','white');
+    m.append('g').selectAll('path').data(landPaths)
+      .join('path').attr('d', d=>d).attr('fill','black').attr('stroke','none');
+    oceanRect.attr('mask','url(#oceanMask)');
+  }
+  function ringToPathAbs(r){
+    const pts=r.map(projection);
+    let d=''; for(let i=0;i<pts.length;i++){ d+=(i?'L':'M')+pts[i][0].toFixed(1)+','+pts[i][1].toFixed(1)+' '; }
+    return d+'Z';
+  }
+
+  // 国リスト
+  function buildList(){
+    listEl.innerHTML=''; selectedNames.clear(); if(!countriesFC) return;
+    const feats=countriesFC.features.slice().sort((a,b)=>{
+      const an=(a.properties&&(a.properties.NAME_SORT||a.properties.ADMIN||a.properties.NAME))||'';
+      const bn=(b.properties&&(b.properties.NAME_SORT||b.properties.ADMIN||b.properties.NAME))||'';
+      return an.localeCompare(bn);
+    });
+    feats.forEach(f=>{
+      const ja=getJaName(f.properties);
+      const key=(f.properties?.ADMIN||f.properties?.NAME);
+      const label=document.createElement('label'); const cb=document.createElement('input');
+      cb.type='checkbox'; cb.value=key;
+      cb.addEventListener('change', ev=>{ const k=ev.target.value; if(ev.target.checked) selectedNames.add(k); else selectedNames.delete(k); enable(); });
+      const span=document.createElement('span'); span.textContent=ja;
+      label.appendChild(cb); label.appendChild(span); listEl.appendChild(label);
+    });
+    filterEl.oninput=()=>{ const q=filterEl.value.trim().toLowerCase(); listEl.querySelectorAll('label').forEach(L=>{ L.style.display = L.textContent.toLowerCase().includes(q)?'':''; }); };
+    document.querySelectorAll('.chips button').forEach(btn=>{ btn.onclick=()=>applyPreset(btn.dataset.preset); });
+  }
+
+  function applyPreset(type){
+    if(!countriesFC) return; const labels=listEl.querySelectorAll('label');
+    const EU={'Austria':1,'Belgium':1,'Bulgaria':1,'Croatia':1,'Cyprus':1,'Czechia':1,'Czech Republic':1,'Denmark':1,'Estonia':1,'Finland':1,'France':1,'Germany':1,'Greece':1,'Hungary':1,'Ireland':1,'Italy':1,'Latvia':1,'Lithuania':1,'Luxembourg':1,'Malta':1,'Netherlands':1,'Poland':1,'Portugal':1,'Romania':1,'Slovakia':1,'Slovenia':1,'Spain':1,'Sweden':1};
+    labels.forEach(L=>{ const cb=L.querySelector('input'); let on=false;
+      if(type==='eu') on=!!EU[cb.value] || !!EU[L.textContent.trim()];
+      else if(type==='all') on=true; else if(type==='clear') on=false;
+      cb.checked=on; if(on) selectedNames.add(cb.value); else selectedNames.delete(cb.value);
+    });
+    enable();
+  }
+
+  function resetGame(){ game=null; okEl.textContent='0'; totalEl.textContent='0'; targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove(); }
+
+  // ====== ピース生成・ドラッグ・判定 ======
+  function chooseOuterRing(feature){
+    if(!feature || !feature.geometry) return null;
+    function ringsOf(g){ const arr=[]; if(g.type==='Polygon'){ if(g.coordinates && g.coordinates[0]) arr.push(g.coordinates[0]); } else if(g.type==='MultiPolygon'){ for(const poly of g.coordinates||[]){ if(poly && poly[0]) arr.push(poly[0]); } } return arr; }
+    function toPx(r){ return r.map(projection); }
+    function areaPx(px){ let a=0; for(let i=0;i<px.length;i++){ const j=(i+1)%px.length; a += px[i][0]*px[j][1]-px[j][0]*px[i][1]; } return Math.abs(a/2); }
+    function bbox(px){ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of px){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } return {minX,maxX,minY,maxY,w:maxX-minX,h:maxY-minY}; }
+    function isAxisRect(px){ if(!px||px.length<4) return false; const xs=[...new Set(px.map(p=>Math.round(p[0])))], ys=[...new Set(px.map(p=>Math.round(p[1])))]; return xs.length===2 && ys.length===2 && px.length<=8; }
+    const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
+    function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
+
+    let best=null, bestA=0; const rings=ringsOf(feature.geometry);
+    for(const ring of rings){ const px=toPx(ring); const A=areaPx(px); if(A<80) continue; if(isAxisRect(px)) continue; if(isHugeBBoxRing(px)) continue; if(A>bestA){ bestA=A; best=ring; } }
+    return best;
+  }
+
+  function ringToPath(r){ const pts=r.map(projection); let d=''; for(let i=0;i<pts.length;i++){ d+=(i?'L':'M')+pts[i][0].toFixed(1)+','+pts[i][1].toFixed(1)+' '; } return d+'Z'; }
+  function ringToPiecePath(r){ const pts=r.map(projection); let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of pts){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } const cx=(minX+maxX)/2, cy=(minY+maxY)/2; let d=''; for(let i=0;i<pts.length;i++){ d+=(i?'L':'M')+(pts[i][0]-cx).toFixed(1)+','+(pts[i][1]-cy).toFixed(1)+' '; } return {d:d+'Z', cx, cy}; }
+
+  function startGame(){
+    resetGame(); if(!countriesFC) return;
+    const chosen=countriesFC.features.filter(f=> selectedNames.has(f.properties?.ADMIN||f.properties?.NAME) );
+
+    const items=[];
+    for(const f of chosen){
+      const ring=chooseOuterRing(f);
+      if(!ring) continue;
+      const slotD=ringToPath(ring);
+      const piece=ringToPiecePath(ring);
+      const nameJa=getJaName(f.properties);
+      items.push({nameJa, slotD, pieceD:piece.d, cx:piece.cx, cy:piece.cy});
+    }
+    items.forEach((it,i)=>it.idx=i);
+
+    const targetSel = targetsRoot.selectAll('path')
+      .data(items)
+      .join('path')
+      .attr('class','target')
+      .attr('d', d=>d.slotD);
+    const slotNodes = targetSel.nodes();
+
+    const gPieces=piecesRoot.selectAll('g.piece-group')
+      .data(items)
+      .join(enter=>{
+        const g=enter.append('g').attr('class','piece-group');
+        g.append('path')
+          .attr('class','piece-path')
+          .attr('d', d=>d.pieceD)
+          .attr('fill', (d,i)=> COLORS[i % COLORS.length]);
+        g.append('text').attr('class','piece-label').attr('x',0).attr('y',0)
+          .text(d=> levelEl.value==='1'? d.nameJa: '');
+        return g;
+      });
+
+    // 初期配置：海岸線BBoxの右下（内側20px）に全ピースを重ねて出現
+    requestAnimationFrame(()=>{
+      const pad = 20;
+      const b = geoPath.bounds(coastFC);
+      const ax = (b[1][0] - pad);
+      const ay = (b[1][1] - pad);
+      gPieces.each(function(d){
+        const tx = ax - d.cx;
+        const ty = ay - d.cy;
+        d.dx = tx; d.dy = ty;
+        d3.select(this).attr('transform', `translate(${tx},${ty})`);
+      });
+    });
+
+    function withinTolerance(groupEl, slotEl){
+      const gr=groupEl.getBoundingClientRect();
+      const sr=slotEl.getBoundingClientRect();
+      const gcx=gr.left+gr.width/2, gcy=gr.top+gr.height/2;
+      const scx=sr.left+sr.width/2, scy=sr.top+sr.height/2;
+      const dist=Math.hypot(gcx-scx, gcy-scy);
+      const pieceBase=Math.max(gr.width, gr.height)*0.35;
+      const tol=Math.max(22, Math.min(48, pieceBase));
+      return dist<=tol;
+    }
+
+    const drag=d3.drag()
+      .on('drag', function(ev,d){
+        d.dx+=ev.dx; d.dy+=ev.dy;
+        d3.select(this).attr('transform',`translate(${d.dx},${d.dy})`);
+      })
+      .on('end', function(ev,d){
+        const slotEl = slotNodes[d.idx];
+        if(withinTolerance(this, slotEl)){
+          d.dx = d.cx; d.dy = d.cy;
+          d3.select(this)
+            .attr('transform', `translate(${d.cx},${d.cy})`)
+            .classed('correct', true)
+            .style('pointer-events','none');
+          if(levelEl.value==='1'){
+            d3.select(this).select('text').text(d.nameJa);
+          }
+          bump();
+        }
+      });
+    gPieces.call(drag);
+
+    // レベル2：名前タイルを別にドラッグして当てる
+    if(levelEl.value==='2'){
+      const tags=items.map((p,i)=>({name:p.nameJa,x:20+((i%2)*140),y:26+Math.floor(i/2)*28}));
+      const gNames=namesRoot.selectAll('g.name').data(tags).join(enter=>{
+        const g=enter.append('g').attr('class','name');
+        g.append('rect').attr('x',-70).attr('y',-12).attr('width',140).attr('height',24).attr('rx',12).attr('ry',12).attr('class','tag-pill');
+        g.append('text').attr('class','tag-text').text(d=>d.name);
+        return g;
+      }).attr('transform',d=>`translate(${d.x},${d.y})`);
+      const dragName=d3.drag().on('drag',function(ev,d){ d.x+=ev.dx; d.y+=ev.dy; d3.select(this).attr('transform',`translate(${d.x},${d.y})`); })
+        .on('end',function(ev,d){ const piece=items.find(p=>p.nameJa===d.name); if(piece){ const dist=Math.hypot(d.x-piece.cx, d.y-piece.cy); if(dist<=40){ d.x=piece.cx; d.y=piece.cy; d3.select(this).attr('transform',`translate(${d.x},${d.y})`).classed('correct',true); bump(); } } });
+      gNames.call(dragName);
+    }
+
+    okEl.textContent='0';
+    totalEl.textContent = levelEl.value==='1' ? items.length : items.length*2;
+    game={level:levelEl.value};
+  }
+
+  function bump(){
+    let ok=0;
+    piecesRoot.selectAll('g.piece-group').each(function(){ if(d3.select(this).classed('correct')) ok++; });
+    if(levelEl.value==='2'){
+      namesRoot.selectAll('g.name').each(function(){ if(d3.select(this).classed('correct')) ok++; });
+    }
+    okEl.textContent=ok;
+  }
+
+  window.addEventListener('resize', ()=>{ if(coastFC){ fitAndDraw(); drawOceanMask(); if(game){ /*再配置は重いので必要時のみ*/ } } });
+})();
+</script>
+</body>
+</html>
