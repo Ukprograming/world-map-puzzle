@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット＋ズーム・パン）</title>
+<title>世界対応・国名パズル（TopoJSON＆地域切替／自動フィット＋ズーム・パン／複数外輪対応）</title>
 <style>
   :root{
     --bg:#f6f9ff; --panel:#ffffff; --ink:#0b1220; --muted:#5b6476;
@@ -107,7 +107,7 @@
         </linearGradient>
       </defs>
 
-      <!-- ★ ここからズーム対象のコンテナ -->
+      <!-- ズーム対象のコンテナ -->
       <g id="zoomLayer">
         <!-- 海（背景。陸でくり抜くマスクはJSで構築） -->
         <rect id="ocean" x="0" y="0" width="100%" height="100%" fill="url(#oceanGrad)"></rect>
@@ -117,7 +117,6 @@
         <g id="piecesRoot"></g>
         <g id="namesRoot"></g>
       </g>
-      <!-- ★ ここまでズーム対象 -->
     </svg>
     <div class="hud">正解: <b id="ok">0</b> / <b id="total">0</b></div>
   </main>
@@ -214,10 +213,7 @@
       currentZoom = ev.transform;
       zoomLayer.attr('transform', currentZoom);
     });
-
-  // ダブルクリックでの自動ズームは無効（誤操作防止）
   svg.call(zoom).on("dblclick.zoom", null);
-
   btnZoomIn.addEventListener('click', ()=> svg.transition().call(zoom.scaleBy, 1.2));
   btnZoomOut.addEventListener('click', ()=> svg.transition().call(zoom.scaleBy, 1/1.2));
   btnZoomReset.addEventListener('click', ()=> svg.transition().call(zoom.transform, d3.zoomIdentity));
@@ -271,15 +267,12 @@
   // ====== 投影＆海岸線描画（国境にフィット）======
   function fitAndDraw(){
     if(!coastFC && !countriesFC) return;
-
-    // ★投影のフィット対象：国境があれば国境、なければ海岸線
     const focusFC = countriesFC || coastFC;
-
     const rect=svg.node().getBoundingClientRect();
     projection=d3.geoMercator().fitExtent([[20,20],[rect.width-20,rect.height-20]], focusFC);
     geoPath=d3.geoPath(projection);
 
-    // ズームは毎回リセット（fitExtentの結果を基準にするため）
+    // ズームは毎回リセット（fitExtentの結果を基準）
     svg.call(zoom.transform, d3.zoomIdentity);
 
     // 背景（海岸線）を描画
@@ -324,8 +317,8 @@
     }
     const m = defs.append('mask')
       .attr('id','oceanMask')
-      .attr('maskUnits','userSpaceOnUse')          /* ★重要 */
-      .attr('maskContentUnits','userSpaceOnUse');  /* ★重要 */
+      .attr('maskUnits','userSpaceOnUse')
+      .attr('maskContentUnits','userSpaceOnUse');
     m.append('rect').attr('x',0).attr('y',0).attr('width','100%').attr('height','100%').attr('fill','white');
     m.append('g').selectAll('path').data(landPaths)
       .join('path').attr('d', d=>d).attr('fill','black').attr('stroke','none');
@@ -371,10 +364,21 @@
 
   function resetGame(){ game=null; okEl.textContent='0'; totalEl.textContent='0'; targetsRoot.selectAll('*').remove(); piecesRoot.selectAll('*').remove(); namesRoot.selectAll('*').remove(); }
 
-  // ====== ピース生成・ドラッグ・判定 ======
-  function chooseOuterRing(feature){
-    if(!feature || !feature.geometry) return null;
-    function ringsOf(g){ const arr=[]; if(g.type==='Polygon'){ if(g.coordinates && g.coordinates[0]) arr.push(g.coordinates[0]); } else if(g.type==='MultiPolygon'){ for(const poly of g.coordinates||[]){ if(poly && poly[0]) arr.push(poly[0]); } } return arr; }
+  // ====== 複数外輪を収集（最大外輪のみの制限を撤廃） ======
+  function collectOuterRings(feature){
+    if(!feature || !feature.geometry) return [];
+    const rings = [];
+    const g = feature.geometry;
+
+    if(g.type === 'Polygon'){
+      if(g.coordinates && g.coordinates[0]) rings.push(g.coordinates[0]);
+    }else if(g.type === 'MultiPolygon'){
+      for(const poly of g.coordinates || []){
+        if(poly && poly[0]) rings.push(poly[0]);
+      }
+    }
+
+    // フィルタ（小さすぎ/矩形/巨大BBoxの除外）
     function toPx(r){ return r.map(projection); }
     function areaPx(px){ let a=0; for(let i=0;i<px.length;i++){ const j=(i+1)%px.length; a += px[i][0]*px[j][1]-px[j][0]*px[i][1]; } return Math.abs(a/2); }
     function bbox(px){ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of px){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } return {minX,maxX,minY,maxY,w:maxX-minX,h:maxY-minY}; }
@@ -382,44 +386,90 @@
     const rect=svg.node().getBoundingClientRect(); const VW=rect.width,VH=rect.height;
     function isHugeBBoxRing(px){ const b=bbox(px), eps=1.5; let on=0, L=0,R=0,T=0,B=0; for(const p of px){ const l=Math.abs(p[0]-b.minX)<=eps, r=Math.abs(p[0]-b.maxX)<=eps, t=Math.abs(p[1]-b.minY)<=eps, bt=Math.abs(p[1]-b.maxY)<=eps; if(l)L++; if(r)R++; if(t)T++; if(bt)B++; if(l||r||t||bt) on++; } const sides=(L>0)+(R>0)+(T>0)+(B>0); const huge=(b.w>=VW*0.55)||(b.h>=VH*0.55); return (on/px.length>=0.75 && sides>=3 && huge); }
 
-    let best=null, bestA=0; const rings=ringsOf(feature.geometry);
-    for(const ring of rings){ const px=toPx(ring); const A=areaPx(px); if(A<80) continue; if(isAxisRect(px)) continue; if(isHugeBBoxRing(px)) continue; if(A>bestA){ bestA=A; best=ring; } }
-    return best;
+    return rings.filter(r=>{
+      const px = toPx(r);
+      const A  = areaPx(px);
+      if (A < 80) return false;
+      if (isAxisRect(px)) return false;
+      if (isHugeBBoxRing(px)) return false;
+      return true;
+    });
   }
 
-  function ringToPath(r){ const pts=r.map(projection); let d=''; for(let i=0;i<pts.length;i++){ d+=(i?'L':'M')+pts[i][0].toFixed(1)+','+pts[i][1].toFixed(1)+' '; } return d+'Z'; }
-  function ringToPiecePath(r){ const pts=r.map(projection); let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(const p of pts){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; } const cx=(minX+maxX)/2, cy=(minY+maxY)/2; let d=''; for(let i=0;i<pts.length;i++){ d+=(i?'L':'M')+(pts[i][0]-cx).toFixed(1)+','+(pts[i][1]-cy).toFixed(1)+' '; } return {d:d+'Z', cx, cy}; }
+  // 複数外輪 → それぞれのパス配列（ターゲット=絶対座標、ピース=共通中心からの相対）
+  function ringsToPaths(rings){
+    const allPts = rings.map(r => r.map(projection));
 
+    // 全体の共通中心（全点のBBox中心）
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    for(const pts of allPts){
+      for(const p of pts){
+        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      }
+    }
+    const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+
+    const slotDs = allPts.map(pts=>{
+      let d=''; for(let i=0;i<pts.length;i++){ d += (i?'L':'M') + pts[i][0].toFixed(1) + ',' + pts[i][1].toFixed(1) + ' '; }
+      return d + 'Z';
+    });
+    const pieceDs = allPts.map(pts=>{
+      let d=''; for(let i=0;i<pts.length;i++){ d += (i?'L':'M') + (pts[i][0]-cx).toFixed(1) + ',' + (pts[i][1]-cy).toFixed(1) + ' '; }
+      return d + 'Z';
+    });
+    return { slotDs, pieceDs, cx, cy };
+  }
+
+  // ====== ピース生成・ドラッグ・判定 ======
   function startGame(){
     resetGame(); if(!countriesFC) return;
     const chosen=countriesFC.features.filter(f=> selectedNames.has(f.properties?.ADMIN||f.properties?.NAME) );
 
     const items=[];
     for(const f of chosen){
-      const ring=chooseOuterRing(f);
-      if(!ring) continue;
-      const slotD=ringToPath(ring);
-      const piece=ringToPiecePath(ring);
+      const rings = collectOuterRings(f);
+      if(!rings.length) continue;
+      const paths = ringsToPaths(rings);
       const nameJa=getJaName(f.properties);
-      items.push({nameJa, slotD, pieceD:piece.d, cx:piece.cx, cy:piece.cy});
+      items.push({
+        nameJa,
+        slotDs: paths.slotDs,
+        pieceDs: paths.pieceDs,
+        cx: paths.cx,
+        cy: paths.cy
+      });
     }
     items.forEach((it,i)=>it.idx=i);
 
-    const targetSel = targetsRoot.selectAll('path')
+    // ターゲット（複数パス）
+    const targetSel = targetsRoot.selectAll('g.slot')
       .data(items)
-      .join('path')
-      .attr('class','target')
-      .attr('d', d=>d.slotD);
-    const slotNodes = targetSel.nodes();
+      .join(enter=>{
+        const g = enter.append('g').attr('class','slot');
+        g.selectAll('path')
+          .data(d=>d.slotDs)
+          .join('path')
+          .attr('class','target')
+          .attr('d', s=>s);
+        return g;
+      });
+    const slotNodes = targetSel.nodes(); // 各国ごとの <g>
 
+    // ピース（複数パス）
     const gPieces=piecesRoot.selectAll('g.piece-group')
       .data(items)
       .join(enter=>{
         const g=enter.append('g').attr('class','piece-group');
-        g.append('path')
+        g.selectAll('path.piece-path')
+          .data(d=>d.pieceDs)
+          .join('path')
           .attr('class','piece-path')
-          .attr('d', d=>d.pieceD)
-          .attr('fill', (d,i)=> COLORS[i % COLORS.length]);
+          .attr('d', pd=>pd)
+          .attr('fill', (pd,ii,nodes)=>{
+            const parent = d3.select(nodes[ii].parentNode).datum();
+            return COLORS[parent.idx % COLORS.length];
+          });
         g.append('text').attr('class','piece-label').attr('x',0).attr('y',0)
           .text(d=> levelEl.value==='1'? d.nameJa: '');
         return g;
@@ -440,9 +490,9 @@
       });
     });
 
-    function withinTolerance(groupEl, slotEl){
+    function withinTolerance(groupEl, slotGEl){
       const gr=groupEl.getBoundingClientRect();
-      const sr=slotEl.getBoundingClientRect();
+      const sr=slotGEl.getBoundingClientRect();
       const gcx=gr.left+gr.width/2, gcy=gr.top+gr.height/2;
       const scx=sr.left+sr.width/2, scy=sr.top+sr.height/2;
       const dist=Math.hypot(gcx-scx, gcy-scy);
@@ -452,11 +502,10 @@
     }
 
     const drag=d3.drag()
-      .on('start', (ev)=>{  // ★ズームとの競合を回避
+      .on('start', (ev)=>{  // ズームとの競合を回避
         if(ev.sourceEvent) ev.sourceEvent.stopPropagation();
       })
       .on('drag', function(ev,d){
-        // ★ズーム倍率で補正
         d.dx += ev.dx / currentZoom.k;
         d.dy += ev.dy / currentZoom.k;
         d3.select(this).attr('transform',`translate(${d.dx},${d.dy})`);
@@ -496,7 +545,6 @@
         .on('end',function(ev,d){
           const piece=items.find(p=>p.nameJa===d.name);
           if(piece){
-            // スクリーン距離ではなく現在のズームを考慮して位置比較（簡易）
             const dist=Math.hypot((d.x-piece.cx),(d.y-piece.cy));
             if(dist<=40/currentZoom.k){
               d.x=piece.cx; d.y=piece.cy;
